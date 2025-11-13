@@ -18,6 +18,9 @@
 - 🎨 **事件过滤**：内置事件过滤器，可选择性地处理特定类型的事件，减少不必要开销
 - ⏱️ **性能监控**：自动记录事件处理耗时，便于性能优化
 - 🔄 **连接复用**：支持 keep-alive 和连接池，减少连接建立开销
+- 💰 **交易功能**：提供完整的交易指令构建功能，支持 Pump 和 PumpAMM 的买卖操作
+- 🎭 **Mayhem Mode 支持**：自动处理 mayhem mode 代币，选择合适的 fee recipient 和 token program
+- 🔀 **智能指令选择**：PumpAMM 根据 quote_mint 类型自动选择正确的指令类型
 
 ## 支持的事件
 
@@ -194,6 +197,117 @@ let config = Config::new("https://solana-yellowstone-grpc.publicnode.com".to_str
 let client = GrpcClient::new(config);
 ```
 
+### 交易指令构建
+
+SDK 提供了完整的交易指令构建功能，支持 Pump 和 PumpAMM 的买卖操作：
+
+#### Pump (Bonding Curve) 交易
+
+```rust
+use solana_pump_grpc_sdk::{TradeClient, OptionBool};
+use solana_sdk::pubkey::Pubkey;
+
+// 创建 Pump 交易客户端
+let client = TradeClient::new();
+
+// 买入指令（普通模式）
+let buy_ix = client.build_buy_instruction(
+    &user,                      // 用户地址（signer）
+    &mint,                      // 代币 mint 地址
+    1000000,                    // 买入的代币数量
+    100000000,                  // 最大 SOL 成本（lamports）
+    OptionBool::Some(true),     // 跟踪交易量
+    false,                      // is_mayhem_mode: 普通模式
+)?;
+
+// 买入指令（Mayhem 模式）
+let buy_ix_mayhem = client.build_buy_instruction(
+    &user,
+    &mint,
+    1000000,
+    100000000,
+    OptionBool::Some(true),
+    true,                       // is_mayhem_mode: Mayhem 模式
+)?;
+
+// 卖出指令
+let sell_ix = client.build_sell_instruction(
+    &user,                      // 用户地址（signer）
+    &mint,                      // 代币 mint 地址
+    1000000,                    // 卖出的代币数量
+    95000000,                   // 最小 SOL 输出（lamports）
+    false,                      // is_mayhem_mode: 普通模式
+)?;
+```
+
+#### PumpAMM 交易
+
+```rust
+use solana_pump_grpc_sdk::{TradeClient, OptionBool, wsol_mint};
+use solana_sdk::pubkey::Pubkey;
+
+// 创建 PumpAMM 交易客户端
+let client = TradeClient::pump_amm();
+
+let pool = "pool_address".parse::<Pubkey>()?;
+let base_mint = "token_mint".parse::<Pubkey>()?;
+let quote_mint = wsol_mint();   // 通常是 WSOL
+let coin_creator = "creator_address".parse::<Pubkey>()?;
+let protocol_fee_recipient = "fee_recipient".parse::<Pubkey>()?;
+
+// 买入指令（quote_mint 是 WSOL/USDC）
+// SDK 会自动使用买入指令类型，并添加 volume accumulator
+let buy_ix = client.build_pump_amm_buy_instruction(
+    &user,
+    &pool,
+    &base_mint,
+    &quote_mint,               // WSOL
+    &coin_creator,
+    &protocol_fee_recipient,
+    1000000,                   // base_amount_out: 期望买入的 base token 数量
+    100000000,                 // max_quote_amount_in: 最大 quote token 输入
+    OptionBool::Some(true),    // track_volume: 跟踪交易量
+    false,                     // is_mayhem_mode: 普通模式
+)?;
+
+// 卖出指令（quote_mint 是 WSOL/USDC）
+// SDK 会自动使用卖出指令类型，不添加 volume accumulator
+let sell_ix = client.build_pump_amm_sell_instruction(
+    &user,
+    &pool,
+    &base_mint,
+    &quote_mint,               // WSOL
+    &coin_creator,
+    &protocol_fee_recipient,
+    1000000,                   // base_amount_in: 卖出的 base token 数量
+    95000000,                  // min_quote_amount_out: 最小 quote token 输出
+    false,                     // is_mayhem_mode: 普通模式
+)?;
+```
+
+**注意**：
+- PumpAMM 会根据 `quote_mint` 是否为 WSOL/USDC 自动选择指令类型和账户列表
+- 如果 `quote_mint` 是 WSOL/USDC，使用标准的买入/卖出指令
+- 如果 `quote_mint` 不是 WSOL/USDC，使用反向交易指令（买入指令会调用卖出方法，反之亦然）
+- Mayhem mode 代币会自动使用正确的 fee recipient 和 token program
+
+#### OptionBool 说明
+
+`OptionBool` 用于表示可选的布尔值，主要用于 `track_volume` 参数：
+
+```rust
+use solana_pump_grpc_sdk::OptionBool;
+
+// 三种状态：
+OptionBool::None          // 不跟踪交易量，序列化为 [0]
+OptionBool::Some(true)    // 跟踪交易量，序列化为 [1, 1]
+OptionBool::Some(false)   // 不跟踪交易量（显式），序列化为 [1, 0]
+```
+
+**使用建议**：
+- 买入指令：通常使用 `OptionBool::Some(true)` 来跟踪交易量
+- 卖出指令：不需要 `track_volume` 参数
+
 
 ## API 文档
 
@@ -314,18 +428,140 @@ pub struct EventContext {
 }
 ```
 
+### `TradeClient`
+
+交易客户端，用于构建 Pump 和 PumpAMM 的交易指令。
+
+```rust
+impl TradeClient {
+    // 创建 Pump 交易客户端
+    pub fn new() -> Self;
+    
+    // 创建 PumpAMM 交易客户端
+    pub fn pump_amm() -> Self;
+    
+    // 使用自定义程序 ID 创建客户端
+    pub fn with_program_id(program_id: Pubkey) -> Self;
+    
+    // 构建 Pump 买入指令
+    pub fn build_buy_instruction(
+        &self,
+        user: &Pubkey,
+        mint: &Pubkey,
+        amount: u64,
+        max_sol_cost: u64,
+        track_volume: OptionBool,
+        is_mayhem_mode: bool,
+    ) -> Result<Instruction>;
+    
+    // 构建 Pump 卖出指令
+    pub fn build_sell_instruction(
+        &self,
+        user: &Pubkey,
+        mint: &Pubkey,
+        amount: u64,
+        min_sol_output: u64,
+        is_mayhem_mode: bool,
+    ) -> Result<Instruction>;
+    
+    // 构建 PumpAMM 买入指令
+    pub fn build_pump_amm_buy_instruction(
+        &self,
+        user: &Pubkey,
+        pool: &Pubkey,
+        base_mint: &Pubkey,
+        quote_mint: &Pubkey,
+        coin_creator: &Pubkey,
+        protocol_fee_recipient: &Pubkey,
+        base_amount_out: u64,
+        max_quote_amount_in: u64,
+        track_volume: OptionBool,
+        is_mayhem_mode: bool,
+    ) -> Result<Instruction>;
+    
+    // 构建 PumpAMM 卖出指令
+    pub fn build_pump_amm_sell_instruction(
+        &self,
+        user: &Pubkey,
+        pool: &Pubkey,
+        base_mint: &Pubkey,
+        quote_mint: &Pubkey,
+        coin_creator: &Pubkey,
+        protocol_fee_recipient: &Pubkey,
+        base_amount_in: u64,
+        min_quote_amount_out: u64,
+        is_mayhem_mode: bool,
+    ) -> Result<Instruction>;
+}
+```
+
+**特性**：
+- 自动根据 mayhem mode 选择正确的 fee recipient 和 token program
+- PumpAMM 自动根据 `quote_mint` 类型选择指令类型和账户列表
+- 自动派生所需的 PDA（Program Derived Address）
+- 完整的账户列表构建，符合程序要求
+
+### 辅助函数
+
+SDK 提供了多个辅助函数用于派生 PDA 和检查 mint 类型：
+
+```rust
+// Pump 相关
+pub fn pump_program_id() -> Pubkey;
+pub fn derive_global_pda(program_id: &Pubkey) -> (Pubkey, u8);
+pub fn derive_bonding_curve_pda(mint: &Pubkey, program_id: &Pubkey) -> (Pubkey, u8);
+pub fn derive_creator_vault_pda(creator: &Pubkey, program_id: &Pubkey) -> (Pubkey, u8);
+pub fn derive_user_associated_token_account(user: &Pubkey, mint: &Pubkey) -> Pubkey;
+
+// PumpAMM 相关
+pub fn pump_amm_program_id() -> Pubkey;
+pub fn derive_pump_amm_global_config_pda(program_id: &Pubkey) -> (Pubkey, u8);
+pub fn derive_pump_amm_pool_pda(
+    index: u16,
+    creator: &Pubkey,
+    base_mint: &Pubkey,
+    quote_mint: &Pubkey,
+    program_id: &Pubkey,
+) -> (Pubkey, u8);
+
+// 工具函数
+pub fn wsol_mint() -> Pubkey;
+pub fn usdc_mint() -> Pubkey;
+pub fn is_wsol(mint: &Pubkey) -> bool;
+pub fn is_usdc(mint: &Pubkey) -> bool;
+pub fn is_wsol_or_usdc(quote_mint: &Pubkey) -> bool;
+pub fn get_fee_recipient(is_mayhem_mode: bool) -> Pubkey;
+pub fn get_token_program_id(is_mayhem_mode: bool) -> Pubkey;
+```
+
 
 ## 运行示例
 
-项目包含一个基本使用示例：
+项目包含多个示例：
+
+### 基本事件监听示例
 
 ```bash
-# 运行示例（无需设置环境变量）
+# 运行基本示例（无需设置环境变量）
 cargo run --example basic
 
 # 或者设置日志级别
 RUST_LOG=debug cargo run --example basic
 ```
+
+### 交易指令构建示例
+
+```bash
+# 运行交易指令构建示例
+cargo run --example trading
+
+# 这个示例展示了如何使用 TradeClient 构建各种交易指令：
+# - Pump 普通模式和 Mayhem 模式的买入/卖出指令
+# - PumpAMM 买入/卖出指令（自动选择指令类型）
+# - OptionBool 的使用方法
+```
+
+所有示例都是只读的，不会发送实际的交易到链上。它们仅用于演示如何构建指令。
 
 ## 项目结构
 
@@ -345,9 +581,14 @@ RUST_LOG=debug cargo run --example basic
 │   ├── parser/             # 事件解析器
 │   │   ├── mod.rs
 │   │   └── events.rs       # EventTrait 和 discriminator 常量定义
+│   ├── trading/            # 交易功能模块
+│   │   ├── mod.rs
+│   │   ├── client.rs       # TradeClient 实现
+│   │   └── helpers.rs      # PDA 派生和辅助函数
 │   └── error.rs            # 错误类型
 └── examples/
-    └── basic.rs            # 基本使用示例
+    ├── basic.rs            # 基本事件监听示例
+    └── trading.rs          # 交易指令构建示例
 ```
 
 ## 错误处理
@@ -368,8 +609,45 @@ SDK 使用 `Result<T, Error>` 类型进行错误处理。错误类型包括：
 - `tokio`：异步运行时
 - `yellowstone-grpc-client`：Yellowstone gRPC 客户端
 - `borsh`：Borsh 序列化/反序列化
-- `solana-sdk`：Solana SDK
+- `solana-sdk`：Solana SDK（用于交易指令构建）
+- `spl-token`：SPL Token 程序支持
 - `thiserror`：错误处理
+
+## 功能对比
+
+### 事件监听 vs 交易指令构建
+
+- **事件监听**：被动监听链上事件，用于数据分析、监控等场景
+- **交易指令构建**：主动构建交易指令，用于实现交易机器人、跟单策略等
+
+SDK 同时支持这两种功能，可以结合使用：
+1. 监听链上事件
+2. 根据事件数据构建交易指令
+3. 发送交易指令到链上（需要用户自己实现交易发送部分）
+
+## 注意事项
+
+### 交易指令构建
+
+- SDK **只负责构建指令**，不负责发送交易
+- 用户需要自己实现：
+  - 钱包签名
+  - 交易发送
+  - 交易确认
+  - 错误重试等逻辑
+
+### Mayhem Mode
+
+- Mayhem mode 代币使用 Token Program 2022 和不同的 fee recipient
+- SDK 会根据 `is_mayhem_mode` 参数自动选择合适的配置
+- 建议从链上读取 bonding curve 账户数据来判断是否为 mayhem mode
+
+### PumpAMM 指令类型
+
+- PumpAMM 的买入/卖出指令类型会根据 `quote_mint` 自动选择
+- 如果 `quote_mint` 是 WSOL/USDC，使用标准买入/卖出指令
+- 如果 `quote_mint` 不是 WSOL/USDC，使用反向交易指令
+- SDK 会自动处理账户列表的差异（如 volume accumulator）
 
 ## 许可证
 

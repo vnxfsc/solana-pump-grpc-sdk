@@ -30,6 +30,12 @@ pub enum Error {
     #[error("签名解析错误")]
     SignatureParse,
 
+    #[error("RPC错误: {0}")]
+    RpcError(String),
+
+    #[error("Pubkey解析错误: {0}")]
+    PubkeyParse(#[from] solana_sdk::pubkey::PubkeyError),
+
     #[error("未知错误: {0}")]
     Unknown(String),
 }
