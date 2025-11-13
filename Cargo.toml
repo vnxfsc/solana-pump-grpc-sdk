@@ -1,0 +1,42 @@
+[package]
+name = "solana-pump-grpc-sdk"
+version = "0.1.0"
+edition = "2021"
+description = "Solana Pump/PumpAmm gRPC event listener SDK"
+license = "MIT"
+authors = ["vnxfsc"]
+repository = "https://github.com/vnxfsc/solana-pump-grpc-sdk"
+homepage = "https://github.com/vnxfsc/solana-pump-grpc-sdk"
+documentation = "https://docs.rs/solana-pump-grpc-sdk"
+readme = "README.md"
+keywords = ["solana", "grpc", "pump", "events", "sdk"]
+categories = ["network-programming", "asynchronous"]
+
+[lib]
+name = "solana_pump_grpc_sdk"
+path = "src/lib.rs"
+
+[dependencies]
+tokio = { version = "1.48.0", features = ["macros", "rt-multi-thread", "signal"] }
+anyhow = "1.0.100"
+borsh = "1.5.7"
+borsh-derive = "1.5.7"
+solana-sdk = "3.0.0"
+base64 = "0.22.1"
+log = "0.4.28"
+yellowstone-grpc-client = "10.1.1"
+yellowstone-grpc-proto = "10.1.1"
+futures-util = "0.3.31"
+tokio-stream = "0.1.17"
+tonic = "0.14.2"
+rustls = { version = "0.23.27", features = ["ring"] }
+thiserror = "1.0"
+
+[dev-dependencies]
+dotenvy = "0.15.7"
+pretty_env_logger = "0.5.0"
+
+[[example]]
+name = "basic"
+path = "examples/basic.rs"
+
